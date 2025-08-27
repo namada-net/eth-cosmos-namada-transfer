@@ -1,5 +1,5 @@
 {
-  "name": "weth-ibc-demo",
+  "name": "weth-ibc-namada-demo",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,11 +11,12 @@
   "dependencies": {
     "@cosmjs/proto-signing": "^0.32.4",
     "@cosmjs/stargate": "^0.32.4",
-    "@skip-go/client": "^0.4.5",
+    "@skip-go/client": "1.5.3",
     "viem": "^2.21.10"
   },
   "devDependencies": {
-    "typescript": "^5.5.4",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2",
     "vite": "^5.4.3"
   }
 }

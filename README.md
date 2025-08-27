@@ -1,4 +1,4 @@
-# WETH → Cosmos Hub → Namada PoC
+# WETH → Cosmos Hub → Namada Demo
 
 ## Setup
 ```bash
