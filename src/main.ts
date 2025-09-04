@@ -7,8 +7,7 @@ import {
   messages,
   route,
 } from "@skip-go/client";
-import { SigningStargateClient, coins } from "@cosmjs/stargate";
-import { createWalletClient, custom } from "viem";
+import { createWalletClient, custom, parseUnits } from "viem";
 import { mainnet } from "viem/chains";
 
 declare global {
@@ -19,21 +18,25 @@ declare global {
 }
 
 const logEl = document.getElementById("log")!;
-const btn0 = document.getElementById("query")!;
-const btn1 = document.getElementById("step1")!;
-const btn2 = document.getElementById("step2")!;
+const btn1 = document.getElementById("transfer")!;
 const amountInput = document.getElementById("amount") as HTMLInputElement;
 const tnamInput = document.getElementById("tnam") as HTMLInputElement;
 
 const ETHEREUM_CHAIN_ID = "1";
-const COSMOS_CHAIN_ID = "cosmoshub-4";
-const COSMOS_RPC = "https://cosmoshub-mainnet-rpc.itrocket.net";
+const ETHEREUM_PROXY_ADDR = "0xfc2d0487a0ae42ae7329a80dc269916a9184cf7c";
+//const ETHEREUM_ICS20_CONTRACT_ADDR = "0x4658C167824C000eA93D62f15B5c9bb53ee329fE";
+const ETHEREUM_ICS20_CONTRACT_ADDR =
+  "0xa348CfE719B63151F228e3C30EB424BA5a983012";
 const WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
+
+const COSMOS_CHAIN_ID = "cosmoshub-4";
+const COSMOS_ETHEREUM_CLIENT = "cosmoshub-0";
+const COSMOS_PORT = "transfer";
+const COSMOS_TO_NAMADA_CHANNEL = "channel-1485";
 const COSMOS_IBC_WETH =
   "ibc/C0B53D3D23827AE38058BED0BDCD554229278AF530A8D265FCF6DFF7C4B2ADFF";
-const COSMOS_TO_NAMADA_CHANNEL = "channel-1485";
 
-let cachedDestIbcDenomOnHub: string | undefined;
+const NAMADA_RECEIVER = "tnam1qz9g9w3mnre6ravw3wrxw5mpzv4vtajy8s0rm8af";
 
 function log(...args: any[]) {
   logEl.textContent += args.join(" ") + "\n";
@@ -46,35 +49,6 @@ function toWeiStr(amountStr: string): string {
   return (int + frac).replace(/^0+/, "") || "0";
 }
 
-export async function getEthereumSigner() {
-  const provider = await getKeplrEvmProvider();
-  const account = await getEvmAddress(provider);
-
-  const client = createWalletClient({
-    chain: mainnet,
-    account,
-    transport: custom(provider),
-  });
-
-  return client;
-}
-
-async function getCosmosSigner(chainId: string) {
-  await window.keplr.enable(chainId);
-  return window.keplr.getOfflineSignerAuto(chainId);
-}
-
-async function getCosmosAddress(): Promise<string> {
-  if (!window.keplr || !window.getOfflineSignerAuto) {
-    throw new Error("Need Keplr!!");
-  }
-
-  await window.keplr.enable(COSMOS_CHAIN_ID);
-
-  const key = await window.keplr.getKey(COSMOS_CHAIN_ID);
-  return key.bech32Address;
-}
-
 async function getKeplrEvmProvider() {
   if (!window.keplr?.ethereum)
     throw new Error("EVM provider of Keplr not found");
@@ -83,187 +57,185 @@ async function getKeplrEvmProvider() {
   return eth;
 }
 
-async function getEvmAddress(eth: any) {
-  const [addr] = await eth.request({ method: "eth_requestAccounts" });
-  return addr as `0x${string}`;
+// Ethereum (EVM)
+async function getEthereumAccount() {
+  const ethProvider = await getKeplrEvmProvider();
+  const accounts = await ethProvider.request({ method: "eth_requestAccounts" });
+  return accounts[0];
 }
 
-function encodeBalanceOf(addr: string) {
-  const a = addr.toLowerCase().replace(/^0x/, "").padStart(64, "0");
-  return "0x70a08231" + a; // 4bytes + 32bytes
+// Cosmos Hub
+async function getCosmosAccount() {
+  await (window as any).keplr.enable(COSMOS_CHAIN_ID);
+  const key = await (window as any).keplr.getKey(COSMOS_CHAIN_ID);
+  return key.bech32Address;
 }
 
-export async function getEthereumWeth(): Promise<BigInt> {
-  const eth = await getKeplrEvmProvider();
-  const addr = await getEvmAddress(eth);
-  const data = encodeBalanceOf(addr);
-  const res = await eth.request({
-    method: "eth_call",
-    params: [{ to: WETH, data }, "latest"],
+// ERC20 ABI (approve)
+const ERC20_ABI = [
+  {
+    type: "function",
+    name: "approve",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ type: "bool" }],
+  },
+];
+
+// Eureka transfer
+const PROXY_ABI = [
+  {
+    type: "function",
+    name: "transfer",
+    inputs: [
+      { name: "amount", type: "uint256" },
+      {
+        name: "transferParams",
+        type: "tuple",
+        components: [
+          { name: "token", type: "address" },
+          { name: "recipient", type: "string" },
+          { name: "sourceClient", type: "string" },
+          { name: "destPort", type: "string" },
+          { name: "timeoutTimestamp", type: "uint64" },
+          { name: "memo", type: "string" },
+        ],
+      },
+      {
+        name: "fees",
+        type: "tuple",
+        components: [
+          { name: "relayFee", type: "uint256" },
+          { name: "relayFeeRecipient", type: "address" },
+          { name: "quoteExpiry", type: "uint64" },
+        ],
+      },
+    ],
+    outputs: [{ type: "uint64" }],
+  },
+] as const;
+
+async function sendEurekaWithPFM(namadaReceiver: string, amountWei: BigInt) {
+  const ethProvider = await getKeplrEvmProvider();
+  const account = await getEthereumAccount();
+  const cosmosAddr = await getCosmosAccount();
+
+  const client = createWalletClient({
+    account,
+    chain: mainnet,
+    transport: custom(ethProvider),
   });
-  return BigInt(res);
-}
 
-btn0.addEventListener("click", async () => {
-  const wethBalance = await getEthereumWeth();
+  // 0. get Cosmos info and the relay fee
+  const r = await route({
+    sourceAssetChainId: ETHEREUM_CHAIN_ID,
+    sourceAssetDenom: WETH,
+    destAssetChainId: COSMOS_CHAIN_ID,
+    destAssetDenom: COSMOS_IBC_WETH,
+    amountIn: String(amountWei),
+    smartRelay: true,
+    experimentalFeatures: ["eureka"],
+  });
+  const eurekaTransfer = r.operations?.[0].eurekaTransfer;
 
-  const cosmosAddr = await getCosmosAddress();
-  const cosmosBalance = await getCosmosBalance(cosmosAddr, COSMOS_IBC_WETH);
+  const feeInfo = eurekaTransfer.smartRelayFeeQuote;
+  const relayFee = BigInt(feeInfo.feeAmount);
+  const relayFeeRecipient = feeInfo.feePaymentAddress;
 
-  log("WETH on Ethereum:", wethBalance);
-  log("WETH on Cosmos", cosmosBalance);
-});
+  const expirationStr = feeInfo.expiration;
+  const expirationSec = Math.floor(Date.parse(expirationStr) / 1000);
+  const quoteExpiry = BigInt(expirationSec);
 
-async function getCosmosBalance(
-  address: string,
-  ibcDenom: string,
-): Promise<BigInt> {
-  const res = await balances({
-    chains: {
-      "cosmoshub-4": {
-        address,
-        denoms: [ibcDenom],
+  const callbackAddress = eurekaTransfer.toChainCallbackContractAddress;
+  const entryContract = eurekaTransfer.toChainEntryContractAddress;
+
+  const receivedAmount = amountWei - relayFee;
+  log("Amount to be received:", receivedAmount);
+
+  // 1. approve
+  await client.writeContract({
+    address: WETH as `0x${string}`,
+    abi: ERC20_ABI,
+    functionName: "approve",
+    args: [ETHEREUM_PROXY_ADDR, amountWei],
+    account,
+  });
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  // IMPORTANT: 12 hours timeout because the Skip relayer will ignore the packet with less than 10 hours timeout
+  const timeout = BigInt(nowSec + 43200);
+
+  // 2. Forward memo with CosmWasm contract (Cosmos to Namada)
+  const memo = JSON.stringify({
+    dest_callback: {
+      address: callbackAddress,
+    },
+    wasm: {
+      contract: entryContract,
+      msg: {
+        action: {
+          action: {
+            ibc_transfer: {
+              ibc_info: {
+                memo: "for Namada",
+                receiver: NAMADA_RECEIVER,
+                recover_address: cosmosAddr,
+                source_channel: COSMOS_TO_NAMADA_CHANNEL,
+              },
+              coin: {
+                denom: COSMOS_IBC_WETH,
+                amount: String(receivedAmount),
+              },
+              // Other transfers use nano sec
+              timeout_timestamp: String(timeout * 1000n * 1000n * 1000n),
+            },
+          },
+          exact_out: false,
+          timeout_timestamp: String(timeout),
+        },
       },
     },
   });
 
-  const bal =
-    (res as any)?.chains?.[COSMOS_CHAIN_ID]?.denoms?.[ibcDenom]?.amount ?? "0";
-  return BigInt(bal);
-}
+  // 3. transfer
+  const txHash = await client.writeContract({
+    address: ETHEREUM_PROXY_ADDR,
+    abi: PROXY_ABI,
+    functionName: "transfer",
+    args: [
+      receivedAmount,
+      {
+        token: WETH,
+        // Need to sent tokens to the callback address
+        recipient: callbackAddress,
+        sourceClient: COSMOS_ETHEREUM_CLIENT,
+        destPort: COSMOS_PORT,
+        timeoutTimestamp: timeout,
+        memo,
+      },
+      {
+        relayFee,
+        relayFeeRecipient,
+        quoteExpiry,
+      },
+    ],
+    account,
+  });
 
-async function waitCosmosBalanceIncrease(
-  address: string,
-  ibcDenom: string,
-  prevBalance: BigInt,
-  timeoutMs = 600_000,
-) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const now = await getCosmosBalance(address, ibcDenom);
-    if (BigInt(now) > prevBalance) return now;
-    log("waiting IBC Eureka transfer completion...");
-    await new Promise((r) => setTimeout(r, 5000));
-  }
-  throw new Error("Timeout waiting for balance increase on Cosmos Hub");
-}
-
-async function findCosmosHubDenomForWeth(): Promise<string> {
-  const list = await assets({ chainId: COSMOS_CHAIN_ID });
-  log("DEBUG:", JSON.stringify(list));
-
-  const match = list.assets.find(
-    (a: any) =>
-      (a.originChainId === ETHEREUM_CHAIN_ID ||
-        a.sourceAssetChainId === ETHEREUM_CHAIN_ID) &&
-      (a.originDenom?.toLowerCase?.() === WETH.toLowerCase() ||
-        a.sourceAssetDenom?.toLowerCase?.() === WETH.toLowerCase()),
-  );
-
-  if (!match) throw new Error("No WETH on Cosmos Hub");
-  return match.denom as string;
+  log("EVM tx sent:", txHash);
 }
 
 btn1.addEventListener("click", async () => {
   try {
     log("Transferring WETH from Ethereum");
 
-    //const res = await findCosmosHubDenomForWeth();
-    //console.log("DEBUG:", res);
-
     const amountWei = toWeiStr(amountInput.value.trim());
-    //const r = await route({
-    //  sourceAssetChainId: ETHEREUM_CHAIN_ID,
-    //  sourceAssetDenom: WETH,
-    //  destAssetChainId: COSMOS_CHAIN_ID,
-    //  destAssetDenom: COSMOS_IBC_WETH,
-    //  amountIn: amountWei,
-    //  smartRelay: true,
-    //  experimentalFeatures: ["eureka"],
-    //});
-
-    const eth = await getKeplrEvmProvider();
-    const evmAddr = await getEvmAddress(eth);
-    const cosmosAddr = await getCosmosAddress();
-
-    const m = await messages({
-      sourceAssetDenom: WETH,
-      sourceAssetChainId: ETHEREUM_CHAIN_ID,
-      destAssetChainId: COSMOS_CHAIN_ID,
-      destAssetDenom: COSMOS_IBC_WETH,
-      amountIn: amountWei,
-      amountOut: amountWei,
-      operations: [
-        {
-          eureka_transfer: {
-            fromChainId: "1",
-            toChainId: "cosmoshub-4",
-            supportsMemo: true,
-						pfmEnabled: true,
-          },
-        },
-      ],
-      chainIdsToAffiliates: {},
-      addressList: [evmAddr, cosmosAddr],
-      experimentalFeatures: ["eureka"],
-      smartRelay: true,
-    });
-    log("DEBUG:", JSON.stringify(m));
-    return;
-
-    const prevBalance = await getCosmosBalance(cosmosAddr, COSMOS_IBC_WETH);
-
-    await executeRoute({
-      route: r,
-      userAddresses: [
-        { chainId: ETHEREUM_CHAIN_ID, address: evmAddr },
-        { chainId: COSMOS_CHAIN_ID, address: cosmosAddr },
-      ],
-      getEvmSigner: async () => getEthereumSigner(),
-      getCosmosSigner: async (chainId) => getCosmosSigner(chainId),
-    });
-    log("Waiting for WETH on Cosmos Hub");
-
-    waitCosmosBalanceIncrease(cosmosAddr, COSMOS_IBC_WETH, prevBalance);
-  } catch (e: any) {
-    log("Step1 error", e.message);
-  }
-});
-
-btn2.addEventListener("click", async () => {
-  try {
-    log("Transferring WETH fron Cosmos Hub to Namada");
-
-    const cosmosSigner = await getCosmosSigner(COSMOS_CHAIN_ID);
-    const client = await SigningStargateClient.connectWithSigner(
-      COSMOS_RPC,
-      cosmosSigner,
-    );
-    const from = await getCosmosAddress();
     const toNamada = tnamInput.value.trim();
-    if (!toNamada) throw new Error("tnam required");
-    const amountWei = toWeiStr(amountInput.value.trim());
 
-    const fee = {
-      amount: coins(4000, "uatom"),
-      gas: "200000",
-    };
-
-    const timeoutTs = Date.now() + 20 * 60 * 1000;
-
-    const res = await client.sendIbcTokens(
-      from,
-      toNamada,
-      coins(amountWei, COSMOS_IBC_WETH),
-      "transfer",
-      COSMOS_TO_NAMADA_CHANNEL,
-      undefined,
-      timeoutTs,
-      fee,
-      // add memo for shielding
-    );
-    log("IBC send result", JSON.stringify(res));
+    await sendEurekaWithPFM(toNamada, BigInt(amountWei));
   } catch (e: any) {
-    log("Step2 error", e.message);
+    log("Transfer error", e.message);
   }
 });
