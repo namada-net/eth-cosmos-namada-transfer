@@ -27,8 +27,6 @@ const COSMOS_TO_NAMADA_CHANNEL = "channel-1485";
 const COSMOS_IBC_WETH =
   "ibc/C0B53D3D23827AE38058BED0BDCD554229278AF530A8D265FCF6DFF7C4B2ADFF";
 
-const NAMADA_RECEIVER = "tnam1qz9g9w3mnre6ravw3wrxw5mpzv4vtajy8s0rm8af";
-
 function log(...args: any[]) {
   logEl.textContent += args.join(" ") + "\n";
 }
@@ -170,8 +168,8 @@ async function sendEurekaWithPFM(namadaReceiver: string, amountWei: BigInt) {
           action: {
             ibc_transfer: {
               ibc_info: {
-                memo: "",
-                receiver: NAMADA_RECEIVER,
+                memo: "", // should be empty
+                receiver: namadaReceiver,
                 recover_address: cosmosAddr,
                 source_channel: COSMOS_TO_NAMADA_CHANNEL,
               },
