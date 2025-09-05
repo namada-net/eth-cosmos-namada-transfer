@@ -1,12 +1,4 @@
-import {
-  assets,
-  balances,
-  chains,
-  createWalletClient,
-  executeRoute,
-  messages,
-  route,
-} from "@skip-go/client";
+import { createWalletClient, route } from "@skip-go/client";
 import { createWalletClient, custom, parseUnits } from "viem";
 import { mainnet } from "viem/chains";
 
@@ -24,7 +16,6 @@ const tnamInput = document.getElementById("tnam") as HTMLInputElement;
 
 const ETHEREUM_CHAIN_ID = "1";
 const ETHEREUM_PROXY_ADDR = "0xfc2d0487a0ae42ae7329a80dc269916a9184cf7c";
-//const ETHEREUM_ICS20_CONTRACT_ADDR = "0x4658C167824C000eA93D62f15B5c9bb53ee329fE";
 const ETHEREUM_ICS20_CONTRACT_ADDR =
   "0xa348CfE719B63151F228e3C30EB424BA5a983012";
 const WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
@@ -179,21 +170,15 @@ async function sendEurekaWithPFM(namadaReceiver: string, amountWei: BigInt) {
           action: {
             ibc_transfer: {
               ibc_info: {
-                memo: "for Namada",
+                memo: "",
                 receiver: NAMADA_RECEIVER,
                 recover_address: cosmosAddr,
                 source_channel: COSMOS_TO_NAMADA_CHANNEL,
               },
-              coin: {
-                denom: COSMOS_IBC_WETH,
-                amount: String(receivedAmount),
-              },
-              // Other transfers use nano sec
-              timeout_timestamp: String(timeout * 1000n * 1000n * 1000n),
             },
           },
           exact_out: false,
-          timeout_timestamp: String(timeout),
+          timeout_timestamp: parseInt((timeout * 1_000_000_000n).toString()),
         },
       },
     },
