@@ -3,20 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WETH → Cosmos Hub → Namada (PoC)</title>
+    <title>WETH Transfer between Ethereum and Namada (PoC)</title>
   </head>
   <body>
-    <h1>WETH → Cosmos Hub → Namada (PoC)</h1>
+    <h1>Ethereum → Cosmos Hub → Namada</h1>
     <div>
       <label>Amount (WETH, 18 decimals):</label><br/>
       <input id="amount" value="0.0001" />
     </div>
     <div>
-      <label>Namada transparent address (tnam...):</label><br/>
-      <input id="tnam" placeholder="tnam..." />
+      <button id="deposit">Deposit: Ethereum to Namada via Cosmos Hub</button>
+    </div>
+    <h1>Namada → Cosmos Hub → Ethereum</h1>
+    <div>
+      <label>Amount (WETH, 18 decimals):</label><br/>
+      <input id="amount_namada" value="0.0001" />
     </div>
     <div>
-      <button id="transfer">WETH Transfer: ETH to Namada via Cosmos Hub </button>
+      <button id="withdraw">Withdraw: Namada to Ethereum via Cosmos Hub</button>
     </div>
     <pre id="log"></pre>
     <script type="module" src="/src/main.ts"></script>
