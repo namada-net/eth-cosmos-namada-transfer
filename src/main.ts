@@ -19,7 +19,10 @@ declare global {
   }
 }
 
+let isUnshielding = false;
+
 const logEl = document.getElementById("log")!;
+const btnUnshield = document.getElementById("unshieldBtn");
 const btnDeposit = document.getElementById("deposit")!;
 const btnWithdraw = document.getElementById("withdraw")!;
 const amountInput = document.getElementById("amount") as HTMLInputElement;
@@ -44,6 +47,7 @@ const COSMOS_IBC_WETH =
 // Namada housefire
 const NAMADA_CHAIN_ID = "housefire-alpaca.cc0d3e0c033be";
 const NAMADA_RPC = "https://namada-housefire-rpc.denodes.xyz";
+const NAMADA_MASP_INDEXER_URL = "https://masp.testnet.siuuu.click";
 const NAMADA_IBC_WETH = "tnam1p4lahvtaw7lrwwd2kx4fvwdkd3hq0kfx4s62e45g";
 const NAMADA_TO_COSMOS_PORT = "transfer";
 const NAMADA_TO_COSMOS_CHANNEL = "channel-26";
@@ -238,21 +242,47 @@ async function deposit(amountWei: BigInt) {
 }
 
 async function withdraw(amountWei: BigInt) {
-  const namada = (window as WindowWithNamada).namada;
-  await namada.connect(NAMADA_CHAIN_ID);
-  const defaultAccount = await namada.defaultAccount();
-  const namadaAddr = defaultAccount.address;
-
-  const sdk = await initSdk({ token: NAM, rpcUrl: NAMADA_RPC });
+  const sdk = await initSdk({
+    token: NAM,
+    rpcUrl: NAMADA_RPC,
+    maspIndexerUrl: NAMADA_MASP_INDEXER_URL,
+  });
   const { tx, rpc, signing } = sdk;
 
-  const wrapperProps: WrapperTxProps = {
+  const namada = (window as WindowWithNamada).namada;
+  await namada.connect(NAMADA_CHAIN_ID);
+  log("DEBUG: accounts:", JSON.stringify(await namada.accounts()));
+  const defaultAccount = await namada.defaultAccount();
+  const namadaAddr = defaultAccount.address;
+  let spendingKey;
+  if (isUnshielding) {
+    const alias = defaultAccount.alias;
+    const accounts = await namada.accounts();
+    for (const account of accounts) {
+      if (account.alias === alias && account.type === "shielded-keys") {
+        const viewingKey = {
+          key: account.viewingKey,
+          birthday: 0,
+        };
+        log("Shielded syncing...");
+        await rpc.shieldedSync([viewingKey], NAMADA_CHAIN_ID);
+        log("Done shielded sync...");
+        spendingKey = account.pseudoExtendedKey;
+        break;
+      }
+    }
+  }
+
+  let wrapperProps: WrapperTxProps = {
     chainId: NAMADA_CHAIN_ID,
     feeAmount: 0.000001,
     gasLimit: 100000,
     token: NAM,
     publicKey: defaultAccount.publicKey,
   };
+  if (isUnshielding) {
+    wrapperProps.wrapperFeePayer = defaultAccount.publicKey;
+  }
 
   // get Cosmos info and the relay fee
   const r = await route({
@@ -265,7 +295,6 @@ async function withdraw(amountWei: BigInt) {
     experimentalFeatures: ["eureka"],
   });
   const eurekaTransfer = r.operations?.[0].eurekaTransfer;
-  log("DEBUG: eurekaTransfer", JSON.stringify(eurekaTransfer));
 
   const feeInfo = eurekaTransfer.smartRelayFeeQuote;
   const relayFeeDenom = feeInfo.feeDenom;
@@ -324,34 +353,47 @@ async function withdraw(amountWei: BigInt) {
       },
     },
   });
-  log("DEBUG: memo for forwarding", memo);
+  log("DEBUG: memo", memo);
 
   const receivedAmount = amountWei - relayFee;
   log("Relay fee:", relayFee);
   log("Amount to be received:", receivedAmount);
 
-  const ibcTransferProps: IbcTransferProps = {
+  let ibcTransferProps: IbcTransferProps = {
     amountInBaseDenom: amountWei,
     channelId: NAMADA_TO_COSMOS_CHANNEL,
     portId: NAMADA_TO_COSMOS_PORT,
-    source: namadaAddr,
     receiver: callbackAddress,
     timeoutSecOffset: 3600,
     token: NAMADA_IBC_WETH,
     memo,
   };
+  if (isUnshielding) {
+    ibcTransferProps.source = spendingKey;
+    ibcTransferProps.refundTarget = namadaAddr;
+  } else {
+    ibcTransferProps.source = namadaAddr;
+  }
+  log("DEBUG: building");
   const ibcTx = await tx.buildIbcTransfer(wrapperProps, ibcTransferProps);
 
   const signProps: SignProps = {
     signer: namadaAddr,
     txs: [ibcTx],
   };
+  log("DEBUG: signing");
   const signedTx = await namada.sign(signProps);
 
+  log("DEBUG: broadcasting");
   const response = await rpc.broadcastTx(signedTx[0]);
 
   log("Namada IBC Transfer:", JSON.stringify(response));
 }
+
+btnUnshield.addEventListener("click", () => {
+  isUnshielding = !isUnshielding;
+  btnUnshield.textContent = isUnshielding ? "Unshielding" : "Transparent";
+});
 
 btnDeposit.addEventListener("click", async () => {
   try {
