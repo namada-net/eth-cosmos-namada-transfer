@@ -1,5 +1,5 @@
-import { createWalletClient, route } from "@skip-go/client";
-import { createWalletClient, custom, parseUnits } from "viem";
+import { route } from "@skip-go/client";
+import { createWalletClient, custom } from "viem";
 import { mainnet } from "viem/chains";
 
 declare global {
